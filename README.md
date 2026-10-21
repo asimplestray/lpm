@@ -420,12 +420,43 @@ and the run prints a NOTE for every overlooked soname — plus one warning
 per flag, before anything is downloaded. Without the flag nothing
 changes: the block stays. Never automatic.
 
+## v2.0.4 — the S/N moment with a full dossier
+
+The `--orphan` flag from 2.0.3 was the honest escape hatch, but it made
+the user carry a risk without a dossier. Now, when a payload soname has
+no provider anywhere (host repos, donor index and transaction all
+checked), the preflight stops and shows exactly which payload files
+need it, and asks:
+
+```
+lpm: 'enchant' needs 'libhspell.so.0' — no provider in the host repos,
+     the donor index or this transaction.
+lpm: payload files needing it (1):
+  usr/lib/enchant-2/enchant_hspell.so
+lpm: if these are optional dlopen plugins, the feature is simply absent
+     at runtime; otherwise the app fails when that path runs.
+Overlook 'libhspell.so.0' and remember it for this host? [s/N]
+```
+
+- **S** → allowed for the transaction *and* recorded in
+  `~/.config/lpm/orphans.lua` (one line per decision: donor + date, a
+  plain Lua file you can read/delete). Future runs print a NOTE and
+  carry on without asking.
+- **N** (or EOF/no-tty stdin, where it refuses to guess) → the block
+  stays exactly as before.
+- `--orphan=SONAME` still works for scripted runs (repeatable), never
+  persisted.
+
+Automation of the *diagnosis*, human judgment on the *risk* — and every
+decision stays auditable on disk.
+
 ## Status
 
-- Version: **2.0.3** (explicit `--orphan` opt-in; platform-twin pruning;
-  host-repodata name bridge; cached indices; honest `any` arch; mirrors
-  per donor; private libs fold; automatic lib aliasing; frozen-snapshot
-  mirror recipe; explicit shlib-provides).
+- Version: **2.0.4** (S/N orphan dossier + persisted decisions;
+  explicit `--orphan` for scripts; platform-twin pruning; host-repodata
+  name bridge; cached indices; honest `any` arch; mirrors per donor;
+  private libs fold; automatic lib aliasing; frozen-snapshot mirror
+  recipe; explicit shlib-provides).
 - Working host policy: **Void ← Arch (default, stable)**, **Void ← Debian
   (experimental)**.
 - Validation: version comparators ported 1:1 from pacman/dpkg/xbps with

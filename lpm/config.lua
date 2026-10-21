@@ -33,9 +33,51 @@ function M.load(profile)
 		end
 	end
 
+	-- v2.0.4: decisões S/N de sonames órfãos ficam num arquivo próprio,
+	-- auditável e editável (uma linha por decisão; apagar = perguntar de novo).
+	local opath = util.expand_path("~/.config/lpm/orphans.lua")
+	if util.file_exists(opath) then
+		local ochunk = loadfile(opath, "t")
+		if ochunk then
+			local ook, otab = pcall(ochunk)
+			if ook and type(otab) == "table" then cfg.orphans = otab end
+		end
+	end
+
 	-- nota de design: nada aqui pode trocar o DOADOR por um mais novo que o
 	-- host; isso é regra do projeto (alias na doc), não preferência de config.
 	return cfg
+end
+
+--- v2.0.4: grava a decisão S/N (sonames órfãos permitidos pelo usuário).
+-- path_override existe para teste; o caminho real é ~/.config/lpm/orphans.lua.
+function M.remember_orphan(soname, donor_id, path_override)
+	local path = path_override or util.expand_path("~/.config/lpm/orphans.lua")
+	local cur = {}
+	if util.file_exists(path) then
+		local chunk = loadfile(path, "t")
+		if chunk then
+			local ok, t = pcall(chunk)
+			if ok and type(t) == "table" then cur = t end
+		end
+	end
+	cur[soname] = { donor = donor_id or "?", date = os.date("%Y-%m-%d") }
+	local keys = {}
+	for k in pairs(cur) do keys[#keys + 1] = k end
+	table.sort(keys)
+	local lines = {
+		"-- lpm: sonames you allowed with S/N (no provider anywhere at the time).",
+		"-- one line per decision; delete a line to be asked again.",
+		"return {",
+	}
+	for _, k in ipairs(keys) do
+		local v = type(cur[k]) == "table" and cur[k] or {}
+		lines[#lines + 1] = ("\t[%q] = { donor = %q, date = %q },"):format(
+			k, v.donor or "?", v.date or "?")
+	end
+	lines[#lines + 1] = "}"
+	util.makedirs(path:match("^(.*)/[^/]+$") or ".")
+	return util.write_file(path, table.concat(lines, "\n") .. "\n")
 end
 
 --- troca a base (espelho) de um doador e REENCADEIA as urls. Puro e

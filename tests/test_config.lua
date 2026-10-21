@@ -83,4 +83,17 @@ assert(nd.repos[1].url ==
 	"https://mirror.csclub.uwaterloo.ca/debian/dists/stable/main/binary-amd64/Packages.gz",
 	"url do índice debian reencadeada")
 
+-- ============ 8. orphans.lua: persistência auditável do S/N ============
+local otmp = "/tmp/opencode/lpm_orphans_test.lua"
+os.remove(otmp)
+assert(config.remember_orphan("libhspell.so.0", "arch", otmp), "grava a decisão")
+local loaded = assert(loadfile(otmp))()
+assert(loaded["libhspell.so.0"] and loaded["libhspell.so.0"].donor == "arch",
+	"soname e doador registrados")
+assert(loaded["libhspell.so.0"].date:match("^%d%d%d%d%-%d%d%-%d%d$"), "data registrada")
+assert(config.remember_orphan("libfoo.so.1", "debian", otmp), "segunda decisão")
+loaded = assert(loadfile(otmp))()
+assert(loaded["libhspell.so.0"] and loaded["libfoo.so.1"], "decisões acumulam (merge)")
+os.remove(otmp)
+
 print("test_config: OK")

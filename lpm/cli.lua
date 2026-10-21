@@ -512,6 +512,13 @@ function M.cmd_install(args)
 			io.stderr:write(("lpm: NOTE: --orphan=%s — a soname with NO provider anywhere will be overlooked in this run; dlopen-only consumers skip it at runtime\n"):format(so))
 		end
 	end
+	-- v2.0.4: decisões S/N anteriores (persistidas em orphans.lua) valem de novo
+	for so, meta in pairs(s.cfg.orphans or {}) do
+		orphans[so] = true
+		local md = type(meta) == "table" and meta or {}
+		io.stderr:write(("lpm: NOTE: '%s' was allowed before (%s, %s) — remembered; delete its line in ~/.config/lpm/orphans.lua to be asked again\n"):format(
+			so, tostring(md.donor or "?"), tostring(md.date or "?")))
+	end
 	load_indices(false, d)
 	local idxs = {}
 	for _, repo in ipairs(d.repos) do
@@ -823,10 +830,42 @@ function M.cmd_install(args)
 	end
 
 	-- fase 2: barreira por payload, com o mapa da transação
+	local function ask_orphan(nome, soname, scan)
+		local files = elf.files_needing(scan, soname)
+		io.stderr:write(("\nlpm: '%s' needs '%s' — no provider in the host repos, the donor index or this transaction.\n"):format(nome, soname))
+		if #files > 0 then
+			io.stderr:write(("lpm: payload files needing it (%d):\n"):format(#files))
+			for i, f in ipairs(files) do
+				if i > 8 then io.stderr:write("  …\n"); break end
+				io.stderr:write("  " .. f .. "\n")
+			end
+			io.stderr:write("lpm: if these are optional dlopen plugins, the feature is simply absent at runtime; otherwise the app fails when that path runs.\n")
+		end
+		if util.trim(util.capture("test -t 0 >/dev/null 2>&1 && echo tty") or "") ~= "tty" then
+			io.stderr:write("lpm: stdin is not a terminal — refusing to guess; use --orphan=" .. soname .. " if you are sure.\n")
+			return false
+		end
+		io.stderr:write(("Overlook '%s' and remember it for this host? [s/N] "):format(soname))
+		io.stderr:flush()
+		local ans = io.read("*l")
+		if not ans then io.stderr:write("\n"); return false end
+		ans = util.trim(ans):lower()
+		if ans == "s" or ans == "sim" or ans == "y" or ans == "yes" then
+			local okw, werr = config.remember_orphan(soname, d.id)
+			if okw then
+				io.stderr:write("lpm: remembered in ~/.config/lpm/orphans.lua\n")
+			else
+				io.stderr:write("lpm: could not remember it: " .. tostring(werr) .. "\n")
+			end
+			orphans[soname] = true
+			return true
+		end
+		return false
+	end
 	for _, n in ipairs(nos) do
 		local okp, bloqueios, avisos, resolvidos = preflight.check_elf(
 			n.entry.name, n.scan, tx_shlibs, glibc_ver,
-			bridge and bridge.shlibs or nil, orphans)
+			bridge and bridge.shlibs or nil, orphans, ask_orphan)
 		for _, a in ipairs(avisos) do print("  ~ " .. a) end
 		if #resolvidos > 0 then
 			print(("  [%s] provided sonames: %s"):format(n.entry.name,
@@ -1082,7 +1121,7 @@ local function main(argv)
 		return 0
 	end
 	if cmd == "--version" or cmd == "version" then
-		print("lpm 2.0.3")
+		print("lpm 2.0.4")
 		return 0
 	end
 	-- guarda de root: o lpm não precisa (e não deve) rodar como root — nunca

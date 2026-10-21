@@ -227,6 +227,15 @@ assert(ok6f and #blocos6f == 0, "órfão declarado em --orphan não bloqueia")
 assert(#avisos6f == 1 and avisos6f[1]:find("orphan allowed", 1, true),
 	"órfão declarado vira aviso explícito (nada em silêncio)")
 
+-- v2.0.4: callback S/N (o CLI pergunta; testes injetam a resposta)
+local ok6g, blocos6g, avisos6g = preflight.check_elf("enchant", scan_orfao, semisl,
+	"2.41_1", nil, {}, function() return true end)
+assert(ok6g and #blocos6g == 0 and #avisos6g == 1,
+	"resposta S permite o órfão, com aviso (nunca em silêncio)")
+local ok6h, blocos6h = preflight.check_elf("enchant", scan_orfao, semisl,
+	"2.41_1", nil, {}, function() return false end)
+assert(ok6h == false and #blocos6h == 1, "resposta N mantém o bloqueio")
+
 -- aliases (v1.2.1: 'libc6→glibc' é AUTOMÁTICO agora — via reconstrução do
 -- soname 'libc.so.6', que é a verdade mesmo; cada map do host decide)
 local aliases = require("lpm.aliases")

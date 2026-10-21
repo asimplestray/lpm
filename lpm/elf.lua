@@ -186,7 +186,7 @@ end
 -- Só ELF little-endian; arquivos ilegíveis contam como skipped.
 function M.scan(dir)
 	local out, code = util.capture("find " .. dir .. " -type f -print 2>/dev/null")
-	local res = { elf = 0, skipped = 0, needed = {}, self = {}, glibc_min = nil }
+	local res = { elf = 0, skipped = 0, needed = {}, file_needed = {}, self = {}, glibc_min = nil }
 	if not out then return res end
 
 	-- Gêmeos de plataforma (v2.0.2): o ecossistema npm/prebuilds embarca o
@@ -234,6 +234,11 @@ function M.scan(dir)
 					for _, s in ipairs(info.needed) do
 						res.needed[s] = (res.needed[s] or 0) + 1
 					end
+					-- v2.0.4: atribuição por ARQUIVO — o prompt S/N mostra
+					-- exatamente quem precisa do soname órfão
+					if #info.needed > 0 then
+						res.file_needed[p] = info.needed
+					end
 					if info.me then res.self[info.me] = true end
 					if info.glibc_min then
 						if not res.glibc_min or version.xbps_cmp(info.glibc_min, res.glibc_min) > 0 then
@@ -252,6 +257,22 @@ function M.scan(dir)
 	table.sort(lst)
 	res.needed_names = lst
 	return res
+end
+
+--- v2.0.4: quais arquivos do payload exigem `soname` (diagnóstico do S/N).
+-- Ordenado para saída determinística.
+function M.files_needing(scan, soname)
+	local out = {}
+	for p, needs in pairs((scan and scan.file_needed) or {}) do
+		for _, s in ipairs(needs) do
+			if s == soname then
+				out[#out + 1] = p
+				break
+			end
+		end
+	end
+	table.sort(out)
+	return out
 end
 
 return M

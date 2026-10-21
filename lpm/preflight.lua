@@ -254,7 +254,7 @@ end
 -- como dep) não é bloqueio; fica anotado para transparência. A bolha
 -- privada '*' e as marcas da transação continuam à FRENTE do repo.
 -- returns ok(bool), bloqueios(list), avisos(list), resolvidos(list)
-function M.check_elf(name, scan, shlibs, host_glibc_ver, repo_shlibs, orphans)
+function M.check_elf(name, scan, shlibs, host_glibc_ver, repo_shlibs, orphans, on_orphan)
 	local ok = true
 	local bloqueios, avisos, resolvidos = {}, {}, {}
 
@@ -301,10 +301,18 @@ function M.check_elf(name, scan, shlibs, host_glibc_ver, repo_shlibs, orphans)
 					"orphan allowed by --orphan: %s needs '%s' and no provider exists anywhere — dlopen-only consumers will skip it at runtime",
 					name, s))
 			else
-				ok = false
-				table.insert(bloqueios, string.format(
-					"soname: %s needs '%s', which the host does not provide (search for providers: lpm search '%s')",
-					name, s, s:gsub("%-%d+$", ""):gsub("%.so.*$", "")))
+				-- v2.0.4: diagnóstico + pergunta S/N no CLI (callback); sem
+				-- callback (script/teste) o bloqueio continua intocado.
+				local allowed = on_orphan and on_orphan(name, s, scan) or false
+				if allowed then
+					table.insert(avisos, string.format(
+						"orphan allowed after confirmation: %s needs '%s' with no provider anywhere", name, s))
+				else
+					ok = false
+					table.insert(bloqueios, string.format(
+						"soname: %s needs '%s', which the host does not provide (search for providers: lpm search '%s')",
+						name, s, s:gsub("%-%d+$", ""):gsub("%.so.*$", "")))
+				end
 			end
 		end
 	end

@@ -51,6 +51,12 @@ local sem_irmao = elf.scan(base .. "/sozinho")
 assert(sem_irmao.elf == 1, "sem irmão glibc o musl NÃO é prunado (incompatibilidade tem que falar)")
 assert((sem_irmao.skipped_twins or 0) == 0, "sem irmão: nenhum pruno")
 
+-- v2.0.4: atribuição por arquivo (diagnóstico do prompt S/N)
+local needs_c = elf.files_needing(com_irmao, "libc.so.6")
+assert(#needs_c == 1 and needs_c[1]:match("glibc"), "files_needing atribui só ao twin incluído")
+local needs_vazio = elf.files_needing(com_irmao, "libnada.so.9")
+assert(#needs_vazio == 0, "soname sem consumidores: lista vazia")
+
 os.execute("rm -rf " .. base)
 
 print("test_elf: OK")
