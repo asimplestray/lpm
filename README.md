@@ -355,6 +355,35 @@ lpm install bitwarden --mirror=https://archive.archlinux.org/repos/2025/05/01
 lpm sync --force
 ```
 
+### Raising the host glibc instead ( Void packages, the other half of the wall)
+
+The archive recipe freezes the *donor*; the alternative is to raise the
+*host*. Void-current itself was still on glibc 2.41 in Oct 2026, but the
+upstream tarball (2.43/2.44) builds cleanly from Void's own template —
+which keeps the loader Void-blessed (never install a foreign distro's
+glibc package; only the loader matching the distro configuration is
+safe). The bump is three edits + patch triage + the usual local repo
+transaction:
+
+```sh
+git clone https://github.com/void-linux/void-packages
+cd void-packages && ./xbps-src binary-bootstrap
+sed -i 's/^version=2\.41/version=2.44/' srcpkgs/glibc/template
+./xbps-src -j$(nproc) pkg glibc   # fails once with `SHA256 mismatch … got: <H>`
+sed -i "s/^checksum=.*/checksum=\"<H>\"/" srcpkgs/glibc/template
+# patch era-backports now fail with "Reversed (or previously applied)"
+#   → already upstream in 2.44, remove each one as it errors
+sudo xbps-install --repository="$PWD/hostdir/binpkgs" \
+    glibc glibc-devel glibc-locales
+```
+
+Proven end-to-end Oct 2026 (8 era-2.41 backport patches removed, 2.44
+built clean, host `.xbps` transaction accepted). The per-package
+preflight then opens by itself: the same `check` that rejected
+`code`/`bitwarden`/`obs-studio`/`virtualbox` against glibc 2.41 no
+longer shows any ABI line — the wall is one rule, so raising the host
+side is the upgrade direction that clears the whole batch at once.
+
 Restrictions unchanged: official repos only — the AUR is out of scope
 (lpm resolves against real indexes; there is no AUR index to trust).
 
@@ -374,7 +403,10 @@ Restrictions unchanged: official repos only — the AUR is out of scope
   `systemd-libs`, …), `bitwarden` ✔ via the frozen-snapshot recipe (2.0.1);
   `code`/`obs-studio`/`virtualbox`/`dolphin-emu`/`prismlauncher` ✘ honest
   rejects (donor needs glibc 2.43–2.44 — the one rule, verified before
-  anything is installed). No package was ever left half-installed.
+  anything is installed). Follow-up, same month: host glibc raised to
+  2.44 via Void's own template (recipe above) — `check` on those five
+  then reports only ordinary provider-deps for the chain pass, no ABI
+  line anywhere. No package was ever left half-installed.
 - Known limits: x86_64 only (untested elsewhere); Debian-qualified deps
   (`perl:any`) lose the qualifier; big-endian ELF is out of scope.
 
