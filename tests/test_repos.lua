@@ -236,6 +236,14 @@ local ok6h, blocos6h = preflight.check_elf("enchant", scan_orfao, semisl,
 	"2.41_1", nil, {}, function() return false end)
 assert(ok6h == false and #blocos6h == 1, "resposta N mantém o bloqueio")
 
+-- v2.0.5: provedor achado pelo probe vence a permissão de órfão. Só quem
+-- continua sem provedor no mapa final pode sair do shlib-requires.
+local pend = preflight.pending_orphans({
+	["libhspell.so.0"] = "(*payload hspell)",
+}, { ["libhspell.so.0"] = true, ["libsumiu.so.1"] = true })
+assert(not pend["libhspell.so.0"], "soname resolvido NÃO é mais órfão")
+assert(pend["libsumiu.so.1"], "sem provedor no mapa final continua órfão")
+
 -- aliases (v1.2.1: 'libc6→glibc' é AUTOMÁTICO agora — via reconstrução do
 -- soname 'libc.so.6', que é a verdade mesmo; cada map do host decide)
 local aliases = require("lpm.aliases")

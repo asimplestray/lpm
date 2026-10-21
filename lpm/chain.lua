@@ -280,4 +280,44 @@ function M.plan(entries, ctx, opts)
 	return plan
 end
 
+--- v2.0.5: nomes de pacote que PODEM prover um soname, derivados do próprio
+-- soname. Isto é só um palpite de BUSCA no índice (libhspell.so.0 → hspell,
+-- libhspell); a confirmação é o DT_SONAME do payload baixado — nunca o nome.
+-- A ordem é determinística e o chamador decide se vale baixar cada candidato.
+function M.provider_candidates(soname)
+	if type(soname) ~= "string" then return {} end
+	-- 'libhspell.so.0' → base 'libhspell.so'; sem '.so' não há o que derivar
+	local base = soname:match("^(.-%.so)%.[%d%.]+$") or soname
+	if not base:match("%.so$") then return {} end
+	local stem = base:gsub("%.so$", "")
+	local out, seen = {}, {}
+	local function add(n)
+		if n and #n >= 2 and not seen[n] then
+			seen[n] = true
+			out[#out + 1] = n
+		end
+	end
+	add(stem)
+	local no_lib = stem:match("^lib(.+)$")
+	if no_lib then
+		add(no_lib)
+		-- variação comum de nome de pacote: 'gtk-3' ↔ 'gtk3'
+		if no_lib:find("-", 1, true) then
+			add((no_lib:gsub("%-", "")))
+		end
+	end
+	-- convenção Debian de empacotar a ABI no nome: libssl.so.3 → libssl3,
+	-- libhspell.so.0 → libhspell0. Continua sendo só nome de busca.
+	local major = soname:match("%.so%.(%d+)")
+	if major then
+		add(stem .. major)
+		add(stem .. "-" .. major)   -- libgtk-3.so.0 → libgtk-3-0
+		if no_lib then
+			add(no_lib .. major)    -- libhspell.so.0 → hspell0
+			add(no_lib .. "-" .. major)
+		end
+	end
+	return out
+end
+
 return M

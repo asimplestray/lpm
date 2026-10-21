@@ -124,4 +124,34 @@ for _, e in ipairs(p6.ordered) do
 end
 assert(p6.why["gcc15-libs"] ~= nil)
 
+-- ============ 8. candidatos derivados do soname (v2.0.5) ============
+-- O nome derivado é só um palpite de BUSCA no índice; quem confirma o
+-- provedor é o DT_SONAME do payload baixado (probe no cli). Nunca o nome.
+local c = chain.provider_candidates("libhspell.so.0")
+assert(c[1] == "libhspell" and c[2] == "hspell", "stem + forma sem 'lib'")
+assert(c[3] == "libhspell0" and c[5] == "hspell0",
+	"convenção Debian da major no nome (libhspell0)")
+local seen = {}
+for _, n in ipairs(c) do
+	assert(not seen[n], "candidato duplicado: " .. n)
+	seen[n] = true
+end
+
+c = chain.provider_candidates("libgtk-3.so.0")
+assert(c[1] == "libgtk-3" and c[2] == "gtk-3" and c[3] == "gtk3",
+	"variação com e sem hífen (nome real de pacote: gtk3)")
+assert(c[5] == "libgtk-3-0", "convenção Debian com hífen (libgtk-3-0)")
+
+c = chain.provider_candidates("libfoo.so.1.2.3")
+assert(c[1] == "libfoo" and c[2] == "foo", "versão composta do soname")
+assert(c[3] == "libfoo1" and c[4] == "libfoo-1", "major 1 do soname composto")
+
+assert(#chain.provider_candidates("libfoo") == 0, "sem '.so' não inventa nome")
+local curto = chain.provider_candidates("liba.so.1")
+assert(curto[1] == "liba", "stem continua candidato")
+for _, n in ipairs(curto) do
+	assert(#n >= 2, "candidato curto demais: " .. n)
+end
+assert(#chain.provider_candidates(nil) == 0, "entrada inválida não explode")
+
 print("test_chain: OK")

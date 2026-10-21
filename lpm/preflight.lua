@@ -239,6 +239,17 @@ function M.check_deps(entry, pm_installed, donor_style, host_style, shlibs, repo
 	return ok, issues
 end
 
+--- v2.0.5: dos órfãos PERMITIDOS, quais continuam sem provedor no mapa
+-- final da transação. Só esses podem sair do shlib-requires: se o probe (ou
+-- qualquer nó) trouxe o provedor, a exigência real do payload fica.
+function M.pending_orphans(map, orphans)
+	local out = {}
+	for so in pairs(orphans or {}) do
+		if not M.map_satisfies(map, so) then out[so] = true end
+	end
+	return out
+end
+
 --- confere o CARGO REAL do payload (resultado de elf.scan) contra o host.
 -- Duas barreiras, nesta ordem:
 --   1. glibc: o máximo GLIBC_ exigido dos binários não pode ser maior que

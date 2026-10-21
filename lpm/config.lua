@@ -7,7 +7,7 @@ local util = require("lpm.util")
 
 local M = {}
 
-function M.load(profile)
+function M.load(profile, paths)
 	local cfg = {
 		db_dir = profile and profile.donor and profile.donor.db_dir
 			or "~/.cache/lpm/arch",
@@ -17,25 +17,27 @@ function M.load(profile)
 		mirrors = {},
 	}
 
-	local path = util.expand_path("~/.config/lpm/config.lua")
-	if not util.file_exists(path) then
-		return cfg
-	end
-	local chunk = loadfile(path, "t")
-	if not chunk then
-		error("syntax error in ~/.config/lpm/config.lua")
-	end
-	local ok, user = pcall(chunk)
-	if not ok then error("config ~/.config/lpm/config.lua: " .. tostring(user)) end
-	if type(user) == "table" then
-		for k, v in pairs(user) do
-			cfg[k] = v
+	-- paths é gancho de teste (par de caminhos); em produção, ~/.config/lpm.
+	-- config.lua é OPCIONAL: a ausência dele não pode pular a leitura das
+	-- decisões de órfão (regressão real: só orphans.lua existia e era ignorado).
+	local path = (paths and paths.config) or util.expand_path("~/.config/lpm/config.lua")
+	if util.file_exists(path) then
+		local chunk = loadfile(path, "t")
+		if not chunk then
+			error("syntax error in ~/.config/lpm/config.lua")
+		end
+		local ok, user = pcall(chunk)
+		if not ok then error("config ~/.config/lpm/config.lua: " .. tostring(user)) end
+		if type(user) == "table" then
+			for k, v in pairs(user) do
+				cfg[k] = v
+			end
 		end
 	end
 
 	-- v2.0.4: decisões S/N de sonames órfãos ficam num arquivo próprio,
 	-- auditável e editável (uma linha por decisão; apagar = perguntar de novo).
-	local opath = util.expand_path("~/.config/lpm/orphans.lua")
+	local opath = (paths and paths.orphans) or util.expand_path("~/.config/lpm/orphans.lua")
 	if util.file_exists(opath) then
 		local ochunk = loadfile(opath, "t")
 		if ochunk then

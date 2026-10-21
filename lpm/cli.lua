@@ -652,6 +652,139 @@ function M.cmd_install(args)
 		return donor_search(soname, true) or donor_search(base, true)
 	end
 
+	-- v2.0.5: provedor INVISÍVEL no índice (caso real: enchant precisa de
+	-- libhspell.so.0; o Arch tem 'hspell', mas o repodata não declara esse
+	-- soname). O índice só NOMEIA candidatos derivados do soname; o
+	-- veredito é o DT_SONAME do payload baixado. Palpite nunca decide.
+	-- Cache: positivo/negativo por soname, invalidado quando versão do
+	-- candidato, base do espelho, cap ou glibc do host mudam.
+	local probe_max = math.floor((tonumber(os.getenv("LPM_PROBE_MAX_MB") or "") or 25) * 1024 * 1024)
+	local db_dir = util.expand_path(d.db_dir or s.cfg.db_dir)
+	local probe_path = util.join(db_dir, ".probe_cache.lua")
+	local probe_cache = util.load(probe_path) or {}
+	local probe_on = not args["no-probe"]
+
+	local function same_sig(a, b)
+		if type(a) ~= "table" or type(b) ~= "table" then return false end
+		local n = 0
+		for k, v in pairs(a) do
+			if b[k] ~= v then return false end
+			n = n + 1
+		end
+		for _ in pairs(b) do n = n - 1 end
+		return n == 0
+	end
+
+	-- CSIZE: compactado (Arch). ISIZE (Arch) vem em bytes; Installed-Size
+	-- (Debian) vem em KB. Serve como teto de download — instalado costuma
+	-- ser maior que o pacote comprimido.
+	local function pkg_size(e)
+		return e.csize or (e.size and e.size * 1024) or e.isize or nil
+	end
+
+	local function probe_provider(soname, demander)
+		if not probe_on then return nil end
+		local cands = chain.provider_candidates(soname)
+		if #cands == 0 then return nil end
+		local entries, sig = {}, {}
+		for _, name in ipairs(cands) do
+			local ce = donor_search(name)
+			if ce and (not args.repo or ce.repo == args.repo) then
+				entries[#entries + 1] = ce
+				sig[name] = ce.version
+			end
+		end
+		if #entries == 0 then return nil end
+		local cached = probe_cache[soname]
+		if cached and cached.base == d.mirror and cached.cap == probe_max
+			and cached.glibc == glibc_ver and same_sig(cached.tested, sig) then
+			local res = cached.result
+			if res and not installed[res] and not estado[res] and not priv.state[res] then
+				local ce = donor_search(res)
+				if ce and (not args.repo or ce.repo == args.repo) then return ce end
+			end
+			if res == false then return nil end
+			-- resultado positivo mas o candidato já está na fila/host: o scan
+			-- normal (ou o mapa do host) resolve; não gasta download de novo
+			if res then return nil end
+		end
+		-- menor payload primeiro; sem tamanho conhecido fica por último
+		table.sort(entries, function(a, b)
+			local sa, sb = pkg_size(a), pkg_size(b)
+			if sa and sb then
+				if sa ~= sb then return sa < sb end
+			elseif sa then return true
+			elseif sb then return false end
+			return a.name < b.name
+		end)
+		local attempted, skipped, failed = {}, {}, {}
+		local tries = 0
+		for _, ce in ipairs(entries) do
+			local sz = pkg_size(ce)
+			local pesc = sz and ("%.1f MB"):format(sz / (1024 * 1024)) or "unknown size"
+			if installed[ce.name] or estado[ce.name] or priv.state[ce.name] then
+				skipped[#skipped + 1] = ce.name .. " (already in the transaction/host)"
+			elseif not sz then
+				skipped[#skipped + 1] = ce.name .. " (size unknown — refusing to download blind)"
+			elseif sz > probe_max then
+				skipped[#skipped + 1] = ce.name .. " (" .. pesc .. " > cap " .. (probe_max // (1024 * 1024)) .. " MB)"
+			elseif tries >= 4 then
+				-- teto de tentativas por soname: evita baixar sete nomes
+				-- grandes por um palpite que não se confirmou
+				skipped[#skipped + 1] = ce.name .. " (attempt budget of 4 reached)"
+			else
+				tries = tries + 1
+				print(("  probe: '%s' has no provider in the repodata — candidate %s-%s (%s) tested by payload scan (demanded by %s)"):format(
+					soname, ce.name, ce.version, pesc, demander))
+				local pkg, perr = convert.acquire(ce, s.profile, s.cfg, d)
+				if not pkg then
+					print(("  probe: %s-%s could not be downloaded (%s)"):format(ce.name, ce.version, tostring(perr)))
+					failed[#failed + 1] = ce.name
+				else
+					local pstage = repo_dir .. "/" .. convert.host_pkgver(ce) .. ".probe.staging"
+					local okp, perr2 = convert.stage(pkg, pstage, d)
+					if not okp then
+						print(("  probe: %s-%s could not be staged (%s)"):format(ce.name, ce.version, tostring(perr2)))
+						failed[#failed + 1] = ce.name
+					else
+						local pscan = elf.scan(pstage)
+						util.sh("rm -rf " .. esc(pstage))
+						attempted[#attempted + 1] = ce.name
+						if pscan.self and pscan.self[soname] then
+							if pscan.glibc_min and glibc_ver
+								and version.xbps_cmp(pscan.glibc_min, glibc_ver) > 0 then
+								print(("  probe: %s-%s provides '%s' but needs glibc %s > host %s — not usable"):format(
+									ce.name, ce.version, soname, pscan.glibc_min, glibc_ver))
+							else
+								print(("  probe: '%s' → %s-%s CONFIRMED as provider (DT_SONAME of the payload)"):format(
+									soname, ce.name, ce.version))
+								probe_cache[soname] = { base = d.mirror, cap = probe_max,
+									glibc = glibc_ver, tested = sig, result = ce.name }
+								util.save(probe_cache, probe_path)
+								return ce
+							end
+						end
+					end
+				end
+			end
+		end
+		if #skipped > 0 then
+			print(("  probe: '%s' skipped: %s"):format(soname, table.concat(skipped, "; ")))
+		end
+		-- negativo só vira cache quando TODO candidato existente foi testado:
+		-- download falho/instalado/na fila não é evidência de ausência
+		if #attempted > 0 or #failed > 0 then
+			print(("  probe: no candidate provides '%s' (tested: %s)"):format(
+				soname, table.concat(attempted, ", ")))
+		end
+		if #failed == 0 and #skipped == 0 and #attempted == #entries then
+			probe_cache[soname] = { base = d.mirror, cap = probe_max,
+				glibc = glibc_ver, tested = sig, result = false }
+			util.save(probe_cache, probe_path)
+		end
+		return nil
+	end
+
 	-- bolha privada: download + staging + scan de um provedor que sombrearia
 	-- o sistema. O payload dele NUNCA vira .xbps; os sonames entram no mapa
 	-- da transação como "(private)", e as necessidades RECURSIVAS dele são
@@ -705,7 +838,9 @@ function M.cmd_install(args)
 		for _, soname in ipairs(scan.needed_names) do
 			local have = preflight.map_satisfies(tx_shlibs, soname)
 			if not have then
-				local prov = soname_sombra(soname)
+				-- v2.0.5: no fold privado também vale o probe por candidato
+				-- (a bolha é fechada; scan de candidato confirma o provedor)
+				local prov = soname_sombra(soname) or probe_provider(soname, e.name)
 				if not prov then
 					io.stderr:write(("× private fold of %s: no donor provider for '%s' — cannot close the private bubble\n"):format(e.name, soname))
 					return nil
@@ -771,7 +906,7 @@ function M.cmd_install(args)
 		-- sodeps revelados pelo payload (a barreira delas vem na fase 2)
 		for _, soname in ipairs(scan.needed_names) do
 			if not preflight.map_satisfies(tx_shlibs, soname) then
-				local prov = soname_sombra(soname)
+				local prov = soname_sombra(soname) or probe_provider(soname, e.name)
 				if os.getenv("LPM_DEBUG") then io.stderr:write(
 					("[debug] sodep %s → %s (state=%s)\n"):format(soname,
 					prov and (prov.name .. "-" .. prov.version) or "nil",
@@ -887,7 +1022,11 @@ function M.cmd_install(args)
 	-- da bolha EM /usr/lib/lpm/<pkg>/ e os bins ELF dele ganham o wrapper.
 	-- acontece ANTES do xbps-create: as libs ficam serem arquivos do pacote.
 	local tx = { pkgver = {}, vpkg = {} }
-	if next(orphans) then tx.orphans = orphans end
+	-- v2.0.5: só é órfão o soname que CONTINUA sem provedor no mapa final.
+	-- Decisão antiga/flag que o probe resolveu não pode apagar o
+	-- shlib-requires real do pacote que consome a lib.
+	local tx_orphans = preflight.pending_orphans(tx_shlibs, orphans)
+	if next(tx_orphans) then tx.orphans = tx_orphans end
 	if #solved > 0 then tx.solved = plan.solved end
 	if bridge then tx.repo_shlibs = bridge.shlibs end
 	for _, n in ipairs(nos) do
@@ -1059,7 +1198,7 @@ end
 local usage = [[
 lpm 2.0 — rent the repositories of famous distros, install via the host's native PM.
 usage: lpm <command> [args] [--repo core|extra] [--donor=arch|debian] [--mirror=URL]
-                [install: --orphan=SONAME[,SONAME,...]
+       install flags: --orphan=SONAME[,SONAME,...]  --no-probe
   detect                what this host is and which lpm profile applies
   doctor                diagnose interpreter, tools and lpm caches
   sync [--force]        download donor indices
@@ -1121,7 +1260,7 @@ local function main(argv)
 		return 0
 	end
 	if cmd == "--version" or cmd == "version" then
-		print("lpm 2.0.4")
+		print("lpm 2.0.5")
 		return 0
 	end
 	-- guarda de root: o lpm não precisa (e não deve) rodar como root — nunca

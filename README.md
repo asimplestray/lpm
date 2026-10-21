@@ -450,13 +450,57 @@ Overlook 'libhspell.so.0' and remember it for this host? [s/N]
 Automation of the *diagnosis*, human judgment on the *risk* — and every
 decision stays auditable on disk.
 
+## v2.0.5 — the provider the index cannot name
+
+Some donor packages provide a soname that their own repodata never
+declares. Real case: `enchant` needs `libhspell.so.0`, Arch ships
+`hspell`, but nothing in the index connects the two — so the chain used
+to fall through to the orphan question even though a real provider
+existed.
+
+Now, when no provider is declared, lpm derives candidate package
+**names** from the soname (`libhspell.so.0` → `libhspell`, `hspell`,
+plus the Debian ABI conventions `libhspell0`/`libgtk-3-0`) and tests the
+ones that exist in the donor index. The index only nominates; the
+verdict is the payload's `DT_SONAME`:
+
+```
+  probe: 'libhspell.so.0' has no provider in the repodata — candidate
+         hspell-1.4-7 (0.6 MB) tested by payload scan (demanded by enchant)
+  probe: 'libhspell.so.0' → hspell-1.4-7 CONFIRMED as provider
+         (DT_SONAME of the payload)
+  note: payload needs 'libhspell.so.0' and no provider is in the
+        transaction — hspell-1.4-7 joins the queue
+```
+
+- names come from the soname, never from a hand-written table; a
+  candidate that does not exist in the index is never downloaded;
+- at most 4 candidates per soname, 25 MB each (`LPM_PROBE_MAX_MB`
+  changes the cap); unknown-size or oversized candidates are skipped;
+- a confirmed provider joins the queue like any declared `provides`,
+  with its own dependency chain and the same ABI/glibc barriers;
+- results are cached in the donor cache (`.probe_cache.lua`), keyed by
+  candidate version, mirror base, size cap and host glibc — an updated
+  index invalidates the cache and re-probes;
+- a provider found by the probe **supersedes** a persisted or `--orphan`
+  allowance: the real `shlib-requires` stays. The allowance only covers
+  sonames that remain unresolved after the final transaction map;
+- `--no-probe` disables the search; if nothing confirms, the 2.0.4 S/N
+  dossier still appears.
+
+Real-world: `lpm install code` now brings `hspell`, `nuspell` and
+`libvoikko` on its own — the three enchant backends the Arch repodata
+never declared — so the optional spell-check features work instead of
+being orphaned.
+
 ## Status
 
-- Version: **2.0.4** (S/N orphan dossier + persisted decisions;
-  explicit `--orphan` for scripts; platform-twin pruning; host-repodata
-  name bridge; cached indices; honest `any` arch; mirrors per donor;
-  private libs fold; automatic lib aliasing; frozen-snapshot mirror
-  recipe; explicit shlib-provides).
+- Version: **2.0.5** (evidence-gated provider probing for undeclared
+  sonames; S/N orphan dossier + persisted decisions; explicit `--orphan`
+  for scripts; platform-twin pruning; host-repodata name bridge; cached
+  indices; honest `any` arch; mirrors per donor; private libs fold;
+  automatic lib aliasing; frozen-snapshot mirror recipe; explicit
+  shlib-provides).
 - Working host policy: **Void ← Arch (default, stable)**, **Void ← Debian
   (experimental)**.
 - Validation: version comparators ported 1:1 from pacman/dpkg/xbps with

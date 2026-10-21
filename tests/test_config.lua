@@ -96,4 +96,20 @@ loaded = assert(loadfile(otmp))()
 assert(loaded["libhspell.so.0"] and loaded["libfoo.so.1"], "decisões acumulam (merge)")
 os.remove(otmp)
 
+-- ============ 9. config.lua ausente não esconde orphans.lua ============
+-- Regressão real: o load retornava cedo quando ~/.config/lpm/config.lua não
+-- existia, então uma decisão S/N persistida era ignorada (e o usuário era
+-- perguntado de novo — ou bloqueado sem tty).
+local ltmp = "/tmp/opencode/lpm_cfgtest_orphans.lua"
+local lf = assert(io.open(ltmp, "w"))
+lf:write('return { ["libx.so.1"] = { donor = "arch", date = "2026-01-01" } }\n')
+lf:close()
+local cfg2 = config.load(profile, {
+	config = "/tmp/opencode/lpm_cfgtest_inexistente.lua",
+	orphans = ltmp,
+})
+assert(type(cfg2.orphans) == "table" and cfg2.orphans["libx.so.1"],
+	"orphans.lua é lido mesmo sem config.lua")
+os.remove(ltmp)
+
 print("test_config: OK")
