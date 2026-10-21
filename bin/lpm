@@ -1,0 +1,28 @@
+#!/bin/sh
+# lpm launcher: find a Lua interpreter and inject the repo into package.path.
+#
+# The language surface of lpm needs Lua 5.2+ (it uses goto); the probe below
+# rejects 5.1-family interpreters (like LuaJIT) that would fail later with a
+# confusing syntax error. To work through symlinks (ln -s, even relative),
+# the repo root is resolved by FOLLOWING the chain of links, not by trusting
+# $0 — readlink is coreutils; without it the old behavior kicks in.
+res=$0
+if command -v readlink >/dev/null 2>&1; then
+	while [ -L "$res" ]; do
+		tgt=$(readlink "$res") || break
+		case $tgt in
+			/*) res=$tgt ;;
+			*) res=$(dirname -- "$res")/$tgt ;;
+		esac
+	done
+fi
+here=$(CDPATH= cd -- "$(dirname -- "$res")/.." && pwd) || exit 1
+for lua in lua5.4 lua5.3 lua5.2 lua; do
+	if command -v "$lua" >/dev/null 2>&1; then
+		if "$lua" -e 'if _VERSION:find("Lua 5%.1") then os.exit(1) end goto ok ::ok::' >/dev/null 2>&1; then
+			LUA_PATH="$here/?.lua;$here/?/init.lua;${LUA_PATH:-;;}" exec "$lua" "$here/lpm/cli.lua" "$@"
+		fi
+	fi
+done
+echo "lpm: no Lua interpreter found in PATH (needs Lua 5.2+; on Void: sudo xbps-install -S lua5.4)" >&2
+exit 1
