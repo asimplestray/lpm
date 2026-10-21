@@ -1260,7 +1260,7 @@ local function main(argv)
 		return 0
 	end
 	if cmd == "--version" or cmd == "version" then
-		print("lpm 2.0.5")
+		print("lpm 2.0.6")
 		return 0
 	end
 	-- guarda de root: o lpm não precisa (e não deve) rodar como root — nunca

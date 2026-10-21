@@ -151,7 +151,11 @@ function M.stale_versions(repo_dir, name, arch, keep_pkgver)
 		local pv, fa = file:match("^(.+)%.(%w[%w_]*)%.xbps$")
 		if fa == arch and pv then
 			local ver = pv:match(pat)
-			if ver and (name .. "-" .. ver) ~= keep_pkgver then
+			-- 'gupnp' NÃO pode casar 'gupnp-igd-1.6…': a parte depois do
+			-- hífen tem que ser VERSÃO (começa com dígito/epoch), não outro
+			-- nome que só compartilha o prefixo. Erro real: o prune apagou
+			-- gupnp-igd ao converter gupnp.
+			if ver and ver:match("^%d") and (name .. "-" .. ver) ~= keep_pkgver then
 				st[#st + 1] = { path = repo_dir .. "/" .. file, pkgver = name .. "-" .. ver }
 			end
 		end
@@ -505,9 +509,17 @@ function M.execute(entry, cfg, profile, staged, scan, tx, host_shlibs)
 	local old = M.stale_versions(repo_dir, entry.name, M.pool_arch(entry), pkgver)
 	for _, oldi in ipairs(old) do
 		util.sh("rm -f " .. esc(oldi.path))
-		util.capture("xbps-rindex -r " .. esc(repo_dir) .. " " ..
-			esc(oldi.pkgver) .. " 2>&1")
 		print("pruned: " .. oldi.pkgver .. " (superseded by " .. pkgver .. ")")
+	end
+	if #old > 0 then
+		-- xbps-rindex -r é --remove-obsoletes, NÃO "remova este pkgver": o
+		-- argumento extra é ignorado e o comando sai 0, deixando entrada
+		-- órfã no índice (o solver listava um .xbps já apagado e a
+		-- instalação final falharia). -c limpa o índice após a remoção.
+		local cout, crc = util.capture("xbps-rindex -c " .. esc(repo_dir) .. " 2>&1")
+		if crc ~= 0 then
+			return nil, "xbps-rindex -c failed after pruning:\n" .. util.trim(cout)
+		end
 	end
 	return { xbps_path = xbps_path, pkgver = pkgver, deps_str = deps, shreq = shreq }
 end

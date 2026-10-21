@@ -40,3 +40,23 @@ eq(convert.rewrite_dep("libc.so.6>=2.4_1", tx, "libtext"),
 -- sem transação: passa cru
 eq(convert.rewrite_dep("glibc>=2.4_1", nil, "x"), "glibc>=2.4_1",
 	"tx nil → dep intacta")
+
+-- ============ prune: nome não pode casar prefixo de OUTRO nome ============
+-- Regressão real: converter 'gupnp' apagou 'gupnp-igd' do repo convertido,
+-- porque '^gupnp%-(.+)$' aceitava 'igd-1.6...' como se fosse versão.
+local tmpdir = "/tmp/opencode/lpm_stale_test"
+os.execute("mkdir -p '" .. tmpdir .. "'")
+local function touch(n)
+	local f = assert(io.open(tmpdir .. "/" .. n, "w"))
+	f:write("x")
+	f:close()
+end
+touch("gupnp-1.6.0.2_1.x86_64.xbps")
+touch("gupnp-igd-1.6.0.2_1.x86_64.xbps")
+touch("gupnp-1:1.6.10.1_1.x86_64.xbps")
+touch("gupnp-2.0.1_1.musl.xbps")
+local stale = convert.stale_versions(tmpdir, "gupnp", "x86_64", "gupnp-1:1.6.10.1_1")
+assert(#stale == 1, "só a versão velha do próprio gupnp é obsoleta (obtive " .. #stale .. ")")
+assert(stale[1].pkgver == "gupnp-1.6.0.2_1",
+	"pkgver velho correto: " .. tostring(stale[1].pkgver))
+os.execute("rm -rf '" .. tmpdir .. "'")

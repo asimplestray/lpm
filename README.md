@@ -493,14 +493,31 @@ Real-world: `lpm install code` now brings `hspell`, `nuspell` and
 never declared — so the optional spell-check features work instead of
 being orphaned.
 
+## v2.0.6 — prune boundary: a prefix is not an identity
+
+Converting `gupnp` used to delete `gupnp-igd` from the converted repo:
+the stale-version matcher accepted anything after `gupnp-`, so
+`gupnp-igd-1.6…` looked like an old version of `gupnp`. The version part
+must now start with a digit (or epoch); otherwise the file belongs to
+another package.
+
+The cleanup also used `xbps-rindex -r`, which means *remove obsoletes*
+— it ignores a pkgver argument and exits 0, leaving a dangling index
+entry for the deleted file (the final `xbps-install` would list it and
+then fail to fetch it). After removing stale files, lpm now runs
+`xbps-rindex -c` to clean the index, and fails loudly if that fails.
+
+Real-world: the missing `gupnp-igd` was reconverted and reindexed; the
+final `code` transaction now lists only files that exist.
+
 ## Status
 
-- Version: **2.0.5** (evidence-gated provider probing for undeclared
-  sonames; S/N orphan dossier + persisted decisions; explicit `--orphan`
-  for scripts; platform-twin pruning; host-repodata name bridge; cached
-  indices; honest `any` arch; mirrors per donor; private libs fold;
-  automatic lib aliasing; frozen-snapshot mirror recipe; explicit
-  shlib-provides).
+- Version: **2.0.6** (prune boundary + index cleanup; evidence-gated
+  provider probing for undeclared sonames; S/N orphan dossier +
+  persisted decisions; explicit `--orphan` for scripts; platform-twin
+  pruning; host-repodata name bridge; cached indices; honest `any` arch;
+  mirrors per donor; private libs fold; automatic lib aliasing;
+  frozen-snapshot mirror recipe; explicit shlib-provides).
 - Working host policy: **Void ← Arch (default, stable)**, **Void ← Debian
   (experimental)**.
 - Validation: version comparators ported 1:1 from pacman/dpkg/xbps with
