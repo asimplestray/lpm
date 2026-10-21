@@ -141,14 +141,23 @@ the app's own package** instead of installing it system-wide:
 
 ```
 app's payload
-  ├── /usr/bin/app                  ← a generated wrapper now
-  ├── /usr/libexec/lpm/app/app      ← the real binary
-  └── /usr/lib/lpm/libfoo/…         ← the donor lib, PRIVATE to this app
+  ├── /usr/bin/app                         ← wrapper (ELF) or injected env (shell)
+  ├── /usr/libexec/lpm/app/app             ← the real binary
+  └── /usr/lib/lpm/app/libfoo/usr/lib/…    ← donor lib, PRIVATE to this app
 ```
 
-- The wrapper sets `LD_LIBRARY_PATH` **only for that app's process**: the
-  system never sees the donor lib, so the native package and everything
-  depending on it stay intact.
+- The path is namespaced by **consumer**: if two apps in the same
+  transaction need the same donor `libxml2`, each gets its own copy under
+  `/usr/lib/lpm/<app>/<lib>/`. A shared path made xbps reject the whole
+  transaction with `file ... already installed by package ...` (seen with
+  `code`: `electron42` and `webkit2gtk-4.1` both folded `libffi`/`libxml2`).
+- `LD_LIBRARY_PATH` points to the directory that actually contains the
+  libraries (`.../usr/lib`, or a multiarch subdir), **only for that app's
+  process**: the system never sees the donor lib, so the native package and
+  everything depending on it stay intact. The root app receives the
+  private dirs of its chain too (the `code` launcher execs `electron42`).
+- Shell launchers in `/usr/bin` get an `export LD_LIBRARY_PATH` inserted
+  after the shebang (they are not moved); non-shell scripts are untouched.
 - Since the libs are files *of the app's own .xbps*, `sudo xbps-remove app`
   removes the whole bubble — no separate packages, no leftover directories,
   still exactly **one sudo command**.
@@ -510,9 +519,36 @@ then fail to fetch it). After removing stale files, lpm now runs
 Real-world: the missing `gupnp-igd` was reconverted and reindexed; the
 final `code` transaction now lists only files that exist.
 
+## v2.0.7 — private fold: per-app namespace and a usable LPATH
+
+The real `code` install exposed three flaws in the v1.2 private bubble:
+
+- `electron42` and `webkit2gtk-4.1` both folded the same `libffi` and
+  `libxml2` into `/usr/lib/lpm/<provider>`, so xbps rejected the whole
+  transaction (`file ... already installed by package ...`). Each
+  consumer now owns `/usr/lib/lpm/<app>/<provider>/…`.
+- The fold copied the donor tree, whose libs live under `usr/lib/`, but
+  the wrapper pointed `LD_LIBRARY_PATH` at the fold root. It now points
+  at the directories that actually contain `.so` files (`usr/lib`, or a
+  multiarch subdir).
+- The real launchers are shell scripts (`/usr/bin/electron42`,
+  `/usr/bin/code-oss`), invisible to the ELF wrapper. Shell scripts in
+  `/usr/bin` get the export after the shebang; non-shell scripts are
+  untouched. The root app also receives the private dirs of its chain,
+  so `code-oss` can exec `electron42` with the private libs.
+
+The fold only carries the providers the consumer actually needs (plus
+their private dependencies), not every private provider in the
+transaction.
+
+Real-world: the 43-package `code` transaction now has zero duplicate
+paths, a clean `xbps-install -n`, and the extracted Electron binary
+resolves `libffi.so.8`/`libxml2.so.16` from its private fold.
+
 ## Status
 
-- Version: **2.0.6** (prune boundary + index cleanup; evidence-gated
+- Version: **2.0.7** (private-fold namespace/LPATH/launchers; prune
+  boundary + index cleanup; evidence-gated
   provider probing for undeclared sonames; S/N orphan dossier +
   persisted decisions; explicit `--orphan` for scripts; platform-twin
   pruning; host-repodata name bridge; cached indices; honest `any` arch;

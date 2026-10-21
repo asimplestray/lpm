@@ -620,7 +620,8 @@ function M.cmd_install(args)
 	-- foldado dentro do pacote do app (bolha privada; ver convert.lua).
 	local fila = {}
 	local estado = {}
-	local priv = { resolved = {}, dirs = {}, order = {}, state = {}, reg = {} }
+	local priv = { resolved = {}, dirs = {}, order = {}, state = {}, reg = {},
+		scan_needs = {} }
 	-- mapa de sonames da transação — declarado AQUI (antes de `privado`)
 	-- porque a bolha privada escreve nele; Lua local só é visível ao código
 	-- DEPOIS da declaração, e o fold roda antes do laço principal
@@ -823,6 +824,13 @@ function M.cmd_install(args)
 		priv.dirs[e.name] = pstage
 		priv.reg[e.name] = true
 		priv.order[#priv.order + 1] = e.name
+		-- fechamento transitivo do fold: o payload privado pode precisar de
+		-- outro provedor privado (ex.: libxml2 → libicu); o consumidor leva
+		-- somente o que a própria árvore pede.
+		priv.scan_needs[e.name] = {}
+		for _, son in ipairs(scan.needed_names or {}) do
+			priv.scan_needs[e.name][#priv.scan_needs[e.name] + 1] = son
+		end
 		for son in pairs(scan.self or {}) do
 			tx_shlibs[son] = "(*private " .. e.name .. ")"
 			if not priv.resolved[son] then priv.resolved[son] = e.name end
@@ -1019,7 +1027,8 @@ function M.cmd_install(args)
 	-- quebram a checagem global de shlibs do xbps 0.60 — rewrite p/ nome
 	-- exato 'pkg=pkgver', que o solver casa direto no repo local)
 	-- v1.2: bolha privada — cada consumer de soname privado recebe o payload
-	-- da bolha EM /usr/lib/lpm/<pkg>/ e os bins ELF dele ganham o wrapper.
+	-- da bolha EM /usr/lib/lpm/<app>/<pkg>/ e os bins/scripts do app ganham
+	-- o env privado (namespace por app: dois consumidores não colidem).
 	-- acontece ANTES do xbps-create: as libs ficam serem arquivos do pacote.
 	local tx = { pkgver = {}, vpkg = {} }
 	-- v2.0.5: só é órfão o soname que CONTINUA sem provedor no mapa final.
@@ -1046,32 +1055,64 @@ function M.cmd_install(args)
 		local pkgs = {}
 		for _, p in ipairs(priv.order) do pkgs[p] = true end
 		tx.private = { sonames = priv.resolved, pkgs = pkgs }
+		-- 1) fold direto: cada consumidor leva só os provedores que o
+		-- payload DELE pede (mais a dependência privada transitiva). O
+		-- namespace /usr/lib/lpm/<app>/<pkg>/ impede que dois pacotes
+		-- instalem o mesmo arquivo e derrubem a transação inteira.
+		local node_dirs, all_dirs, seen_dirs = {}, {}, {}
 		for _, n in ipairs(nos) do
-			local needs = false
+			local needed = {}
 			for _, s in ipairs(n.scan.needed_names or {}) do
 				local have = preflight.map_satisfies(tx_shlibs, s)
 				if have and have:find("private", 1, true) then
-					needs = true
-					break
+					needed[#needed + 1] = s
 				end
 			end
-			if needs then
-				local dirs = convert.fold_private(n.staged, priv)
-				local wraps, werr = convert.wrap_bins(n.staged, n.entry.name, dirs)
-				if not wraps then
-					io.stderr:write("lpm: " .. tostring(werr) .. "\n")
-					return 1
+			if #needed > 0 then
+				local dirs = convert.fold_private(n.staged, priv, n.entry.name, needed)
+				node_dirs[n.entry.name] = dirs
+				for _, d in ipairs(dirs) do
+					if not seen_dirs[d] then
+						seen_dirs[d] = true
+						all_dirs[#all_dirs + 1] = d
+					end
 				end
 				if #dirs > 0 then
 					print(("folding private libs into %s: %s"):format(
 						n.entry.name, table.concat(dirs, ", ")))
 				end
+			end
+		end
+		-- 2) o app RAIZ precisa do env de toda a cadeia: o launcher do
+		-- code (script /usr/bin/code-oss) executa o electron42, que por sua
+		-- vez precisa de libffi/libxml2 privados; um wrapper só no pacote
+		-- electron42 não alcançaria o processo iniciado pelo code.
+		local roots = {}
+		for _, e in ipairs(founds) do roots[e.name] = true end
+		for _, n in ipairs(nos) do
+			local dirs = node_dirs[n.entry.name]
+			if roots[n.entry.name] and #all_dirs > 0 then dirs = all_dirs end
+			if dirs and #dirs > 0 then
+				local wraps, werr = convert.wrap_bins(n.staged, n.entry.name, dirs)
+				if not wraps then
+					io.stderr:write("lpm: " .. tostring(werr) .. "\n")
+					return 1
+				end
+				local scripts, serr = convert.inject_private_env(n.staged, dirs)
+				if not scripts then
+					io.stderr:write("lpm: " .. tostring(serr) .. "\n")
+					return 1
+				end
 				if #wraps > 0 then
 					print(("wrapped: %s (real binaries under /usr/libexec/lpm/%s)"):format(
 						table.concat(wraps, ", "), n.entry.name))
 				end
-				if #wraps == 0 and #dirs > 0 then
-					print("  ~ note: this package has private libs but no ELF in /usr/bin — if it loads them at runtime (python C-extensions etc.), run it with LD_LIBRARY_PATH=" ..
+				if #scripts > 0 then
+					print(("private env in: %s (LD_LIBRARY_PATH=%s)"):format(
+						table.concat(scripts, ", "), table.concat(dirs, ":")))
+				end
+				if #wraps == 0 and #scripts == 0 then
+					print("  ~ note: this package has private libs but no ELF/script in /usr/bin — if it loads them at runtime (python C-extensions etc.), run it with LD_LIBRARY_PATH=" ..
 						table.concat(dirs, ":"))
 				end
 			end
@@ -1260,7 +1301,7 @@ local function main(argv)
 		return 0
 	end
 	if cmd == "--version" or cmd == "version" then
-		print("lpm 2.0.6")
+		print("lpm 2.0.7")
 		return 0
 	end
 	-- guarda de root: o lpm não precisa (e não deve) rodar como root — nunca

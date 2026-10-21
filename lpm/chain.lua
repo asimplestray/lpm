@@ -16,7 +16,7 @@
 -- pode ser resolvido por um provedor do doador cujo NOME sombrearia um
 -- pacote nativo do host, o plano continua com o provedor marcado como
 -- PRIVADO: o payload dele não vira .xbps — entra DENTRO do pacote do app
--- (fold em /usr/lib/lpm/<pkg> + wrapper gerado; ver convert.lua). O
+-- (fold em /usr/lib/lpm/<app>/<pkg> + wrapper/env gerado; ver convert.lua). O
 -- contexto pode recusar (ctx.allow_private = nil → aborta como antes).
 -- Detalhes:
 --   * a sub-cadeia INTEIRA de um provedor privado também é privada (nada

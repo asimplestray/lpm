@@ -287,32 +287,89 @@ end
 --
 -- A ideia do usuário: quando a única lib que fecha a transação sombrearia
 -- um pacote nativo do host, ela NÃO entra no sistema — o payload dela é
--- copiado para /usr/lib/lpm/<pkg>/ DENTRO do pacote do app, e um wrapper
--- gerado aponta o LD_LIBRARY_PATH do processo do app para lá. Resultado:
--- um .xbps só, um sudo só, desinstalação limpa pelo xbps (as libs são
--- arquivos do pacote), e a lib nativa do host intocada.
+-- copiado para /usr/lib/lpm/<app>/<pkg>/ DENTRO do pacote do app, e um
+-- wrapper gerado aponta o LD_LIBRARY_PATH do processo do app para lá.
+-- Resultado: um .xbps só, um sudo só, desinstalação limpa pelo xbps (as
+-- libs são arquivos do pacote), e a lib nativa do host intocada.
+--
+-- O nível <app> NÃO é decorativo: dois consumidores do mesmo provedor
+-- precisam de cópias separadas. Com caminho compartilhado
+-- (/usr/lib/lpm/libxml2), o xbps recusa a transação inteira com
+-- "file ... already installed by package ..." (visto ao instalar code:
+-- electron42 e webkit2gtk-4.1 disputavam libxml2 e libffi).
+
+--- diretórios RELATIVOS que realmente contêm as libs do provedor.
+-- O payload é copiado inteiro (usr/lib + dados), então o LD_LIBRARY_PATH
+-- precisa apontar para <fold>/usr/lib (ou <fold>/usr/lib/<multiarch>),
+-- não para a raiz do fold. Sem isso o wrapper existe mas o loader não acha
+-- nada — bug silencioso que só aparece ao executar o app.
+local function provider_lib_dirs(src)
+	local out = util.capture("find " .. esc(src) ..
+		" \\( -type f -o -type l \\) \\( -name '*.so' -o -name '*.so.*' \\) -print 2>/dev/null")
+	local dirs, seen = {}, {}
+	for path in (out or ""):gmatch("[^\r\n]+") do
+		local parent = path:match("^(.*)/[^/]+$")
+		-- extensões Python (.so) não são bibliotecas do processo do app;
+		-- colocá-las no LD_LIBRARY_PATH só polui a busca do loader
+		if parent and not parent:find("/site-packages", 1, true) then
+			local rel = parent:sub(#src + 2)
+			if rel == "" then rel = "." end
+			if not seen[rel] then
+				seen[rel] = true
+				dirs[#dirs + 1] = rel
+			end
+		end
+	end
+	table.sort(dirs)
+	if #dirs == 0 then dirs[1] = "." end
+	return dirs
+end
 
 --- copia os payloads privados para o staging do app e devolve os caminhos
--- RELATIVOS (/usr/lib/lpm/<pkg>) na ordem de preferência. ordem importa:
--- no LD_LIBRARY_PATH, o primeiro diretório vence.
-function M.fold_private(staged, priv)
-	if not priv or #priv.order == 0 then return {} end
+-- RELATIVOS de LD_LIBRARY_PATH (/usr/lib/lpm/<app>/<pkg>/usr/lib) na ordem
+-- de preferência. ordem importa: no LD_LIBRARY_PATH, o primeiro vence.
+-- needed_sonames limita a bolha ao que ESTE app pede; provedores privados
+-- exigidos por esses provedores entram por fechamento transitivo.
+function M.fold_private(staged, priv, consumer, needed_sonames)
+	if not priv or not consumer or #priv.order == 0 then return {} end
+	local take = {}
+	local function add(pkg)
+		if take[pkg] or not priv.dirs[pkg] then return end
+		take[pkg] = true
+		for _, son in ipairs((priv.scan_needs and priv.scan_needs[pkg]) or {}) do
+			local dep = priv.resolved[son]
+			if dep then add(dep) end
+		end
+	end
+	if needed_sonames then
+		for _, son in ipairs(needed_sonames) do
+			local pkg = priv.resolved[son]
+			if pkg then add(pkg) end
+		end
+	else
+		for _, pkg in ipairs(priv.order) do add(pkg) end
+	end
 	local dirs = {}
 	for _, pkg in ipairs(priv.order) do
-		local rel = "/usr/lib/lpm/" .. pkg
-		local dst = staged .. rel
-		util.makedirs(dst)
-		-- cp do CONTEÚDO do staging do provedor (o payload já ignora os
-		-- scripts/metadados do doador — mesma regra de sempre)
-		util.sh("cp -a " .. esc(priv.dirs[pkg]) .. "/. " .. esc(dst) .. "/")
-		dirs[#dirs + 1] = rel
+		if take[pkg] then
+			local root = "/usr/lib/lpm/" .. consumer .. "/" .. pkg
+			local dst = staged .. root
+			util.makedirs(dst)
+			-- cp do CONTEÚDO do staging do provedor (o payload já ignora os
+			-- scripts/metadados do doador — mesma regra de sempre)
+			util.sh("cp -a " .. esc(priv.dirs[pkg]) .. "/. " .. esc(dst) .. "/")
+			for _, libdir in ipairs(provider_lib_dirs(priv.dirs[pkg])) do
+				dirs[#dirs + 1] = libdir == "." and root or (root .. "/" .. libdir)
+			end
+		end
 	end
 	return dirs
 end
 
 --- troca cada ELF de <staged>/usr/bin por um wrapper gerado; o binário
 -- real vai para /usr/libexec/lpm/<app>/<nome>. Scripts (não-ELF) ficam
--- como estão. retorna lista de bins embrulhados | nil, msg
+-- como estão e recebem o env por inject_private_env. retorna lista de bins
+-- embrulhados | nil, msg
 function M.wrap_bins(staged, app_name, priv_dirs)
 	local bin_dir = staged .. "/usr/bin"
 	if not util.dir_exists(bin_dir) then return {} end
@@ -350,6 +407,61 @@ function M.wrap_bins(staged, app_name, priv_dirs)
 		end
 	end
 	return wraps
+end
+
+--- injeta o LD_LIBRARY_PATH privado em scripts de /usr/bin SEM movê-los.
+-- Launchers reais (electron42, code) são shell: eles executam o ELF de
+-- verdade, e um wrapper só no ELF não os alcança; mover o script poderia
+-- quebrar caminhos relativos. O export é inserido logo após o shebang e o
+-- script continua no mesmo lugar. retorna lista de scripts alterados | nil,msg
+function M.inject_private_env(staged, priv_dirs)
+	if not priv_dirs or #priv_dirs == 0 then return {} end
+	local bin_dir = staged .. "/usr/bin"
+	if not util.dir_exists(bin_dir) then return {} end
+	local out = util.capture(
+		"find " .. esc(bin_dir) ..
+		" -maxdepth 1 -type f -perm -u+x -print 2>/dev/null")
+	if not out or out == "" then return {} end
+	local lp = table.concat(priv_dirs, ":")
+	local export_line = 'export LD_LIBRARY_PATH="' .. lp ..
+		'${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\n'
+	local shell_names = { "sh", "bash", "dash", "zsh", "ksh", "ash" }
+	local function is_shell(shebang)
+		for _, name in ipairs(shell_names) do
+			if shebang:match("%f[%w]" .. name .. "%f[%W]") then return true end
+		end
+		return false
+	end
+	local changed = {}
+	for path in out:gmatch("[^\r\n]+") do
+		local f = io.open(path, "rb")
+		local head = f and (f:read(2) or "")
+		if f then f:close() end
+		if head == "#!" then
+			local body, rerr = util.read_file(path)
+			if not body then
+				return nil, "could not read script " .. path .. ": " .. tostring(rerr)
+			end
+			-- só shell: `export` em shebang python/perl/fish corromperia o
+			-- script; esses continuam intocados (e o note do chamador avisa)
+			if is_shell(body:match("^#!([^\n]*)") or "")
+				and not body:find("generated by lpm:", 1, true) then
+				local nl = body:find("\n", 1, true)
+				if nl then
+					local new = body:sub(1, nl) ..
+						"# generated by lpm: private donor libs for this process\n" ..
+						export_line .. body:sub(nl + 1)
+					local okw, werr = util.write_file(path, new)
+					if not okw then
+						return nil, "could not write private env into " .. path ..
+							": " .. tostring(werr)
+					end
+					changed[#changed + 1] = "/usr/bin/" .. path:match("([^/]+)$")
+				end
+			end
+		end
+	end
+	return changed
 end
 
 --- roda xbps-create (cwd no repósito, destdir=staging) e xbps-rindex -a.
