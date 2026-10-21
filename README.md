@@ -387,11 +387,26 @@ side is the upgrade direction that clears the whole batch at once.
 Restrictions unchanged: official repos only — the AUR is out of scope
 (lpm resolves against real indexes; there is no AUR index to trust).
 
+## v2.0.2 — platform-twin pruning
+
+Some payload add-ons ship the same native module as *both* a glibc and a
+musl build of the same architecture (`@parcel/watcher-linux-x64-musl`
+alongside the `-glibc` twin, both inside `code`, for example). The JS
+side picks the matching one at runtime, so on a glibc host the musl twin
+is never dlopened — but the ELF scan aggregated its `DT_NEEDED` and
+blocked the whole transaction on `libc.musl-x86_64.so.1`, which no glibc
+host provides. The scan now prunes a musl twin *only* when the glibc
+twin actually exists next to it (headless-musl-only payloads keep
+failing loudly — that incompatibility must speak). Honest, narrow, and
+verified live on the real `code` payload (1 twin pruned, `elf=25`,
+musl stub gone from the aggregated needs).
+
 ## Status
 
-- Version: **2.0.1** (host-repodata name bridge; cached indices; honest `any`
-  arch; mirrors per donor; private libs fold; automatic lib aliasing;
-  frozen-snapshot mirror recipe; explicit shlib-provides).
+- Version: **2.0.2** (platform-twin pruning; host-repodata name bridge;
+  cached indices; honest `any` arch; mirrors per donor; private libs
+  fold; automatic lib aliasing; frozen-snapshot mirror recipe; explicit
+  shlib-provides).
 - Working host policy: **Void ← Arch (default, stable)**, **Void ← Debian
   (experimental)**.
 - Validation: version comparators ported 1:1 from pacman/dpkg/xbps with

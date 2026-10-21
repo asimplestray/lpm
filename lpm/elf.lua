@@ -188,26 +188,61 @@ function M.scan(dir)
 	local out, code = util.capture("find " .. dir .. " -type f -print 2>/dev/null")
 	local res = { elf = 0, skipped = 0, needed = {}, self = {}, glibc_min = nil }
 	if not out then return res end
-	for path in out:gmatch("[^\r\n]+") do
-		local f, cls = open_elf(path)
-		if not f then
-			res.skipped = res.skipped + 1
+
+	-- Gêmeos de plataforma (v2.0.2): o ecossistema npm/prebuilds embarca o
+	-- mesmo addon duas vezes — `...-linux-x64-glibc/` e `...-linux-x64-musl/`
+	-- (@parcel/watcher, por exemplo). No host glibc o twin musl NUNCA é
+	-- carregado (o JS resolve por require-optional e cai no glibc), mas o
+	-- scan agrega os DT_NEEDED dele e inventa uma exigência de
+	-- libc.musl-x86_64.so.1 que paralisa a transação. Prúna: só quando o
+	-- twin glibc REALMENTE existe na mesma árvore (se não existir, o binário
+	-- seria o único e a incompatibilidade deve continuar falando).
+	local paths, dirSet = {}, {}
+	for p in out:gmatch("[^\r\n]+") do
+		paths[#paths + 1] = p
+		local parent = p:match("^(.*)/[^/]+$")
+		if parent then dirSet[parent] = true end
+	end
+	local function twin_glibc(p)
+		local dir, tail = p:match("^(.*/[^/]*linux%-x64%-musl)(/.*)$")
+		if dir then
+			local twin = dir:gsub("linux%-x64%-musl$", "linux-x64-glibc") .. tail
+			local parent = twin:match("^(.*)/[^/]+$")
+			if dirSet[parent] then return twin end
+		end
+		return nil
+	end
+	res.excluded_twins, res.skipped_twins = {}, 0
+
+	for _, p in ipairs(paths) do
+		local twin = twin_glibc(p)
+		if twin then
+			-- conta como incluída para o skipped não mascarar
+			res.skipped_twins = res.skipped_twins + 1
+			if #res.excluded_twins < 8 then
+				res.excluded_twins[#res.excluded_twins + 1] = p
+			end
 		else
-			local info = dyn_info(f, cls)
-			f:close()
-			if info then
-				res.elf = res.elf + 1
-				for _, s in ipairs(info.needed) do
-					res.needed[s] = (res.needed[s] or 0) + 1
-				end
-				if info.me then res.self[info.me] = true end
-				if info.glibc_min then
-					if not res.glibc_min or version.xbps_cmp(info.glibc_min, res.glibc_min) > 0 then
-						res.glibc_min = info.glibc_min
-					end
-				end
-			else
+			local f, cls = open_elf(p)
+			if not f then
 				res.skipped = res.skipped + 1
+			else
+				local info = dyn_info(f, cls)
+				f:close()
+				if info then
+					res.elf = res.elf + 1
+					for _, s in ipairs(info.needed) do
+						res.needed[s] = (res.needed[s] or 0) + 1
+					end
+					if info.me then res.self[info.me] = true end
+					if info.glibc_min then
+						if not res.glibc_min or version.xbps_cmp(info.glibc_min, res.glibc_min) > 0 then
+							res.glibc_min = info.glibc_min
+						end
+					end
+				else
+					res.skipped = res.skipped + 1
+				end
 			end
 		end
 	end

@@ -29,4 +29,28 @@ end
 local vazio = elf.scan("/tmp/opencode/nao-existe-" .. os.time())
 assert(vazio.elf == 0, "diretório inexistente: zero ELFs")
 
+-- gêmeos de plataforma (v2.0.2): twin musl é prunado SOMENTE quando o irmão
+-- glibc existe; sem irmão, o scan não descarta nada.
+local base = "/tmp/opencode/test_elf_twins"
+os.execute("rm -rf " .. base)
+os.execute("mkdir -p " .. base .. "/pkg/parcelwatcher-linux-x64-glibc "
+	.. base .. "/pkg/parcelwatcher-linux-x64-musl "
+	.. base .. "/sozinho/parcelwatcher-linux-x64-musl")
+os.execute("cp /usr/bin/ls " .. base .. "/pkg/parcelwatcher-linux-x64-glibc/watcher.node")
+os.execute("cp /usr/bin/ls " .. base .. "/pkg/parcelwatcher-linux-x64-musl/watcher.node")
+os.execute("cp /usr/bin/ls " .. base .. "/sozinho/parcelwatcher-linux-x64-musl/watcher.node")
+
+local com_irmao = elf.scan(base .. "/pkg")
+assert(com_irmao.elf == 1, "twin musl prunado: só o ELF do twin glibc conta (" .. tostring(com_irmao.elf) .. ")")
+assert(com_irmao.skipped_twins == 1, "1 pruno contabilizado")
+assert(#com_irmao.excluded_twins == 1, "lista de excluídos registra o caminho")
+assert(com_irmao.excluded_twins[1]:match("linux%-x64%-musl"), "excluído é o caminho musl")
+assert((com_irmao.needed["libc.so.6"] or 0) >= 1, "needed agregado segue falando")
+
+local sem_irmao = elf.scan(base .. "/sozinho")
+assert(sem_irmao.elf == 1, "sem irmão glibc o musl NÃO é prunado (incompatibilidade tem que falar)")
+assert((sem_irmao.skipped_twins or 0) == 0, "sem irmão: nenhum pruno")
+
+os.execute("rm -rf " .. base)
+
 print("test_elf: OK")
