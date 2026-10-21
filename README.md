@@ -401,12 +401,31 @@ failing loudly — that incompatibility must speak). Honest, narrow, and
 verified live on the real `code` payload (1 twin pruned, `elf=25`,
 musl stub gone from the aggregated needs).
 
+## v2.0.3 — explicit orphan-soname opt-in
+
+Some payloads carry runtime-dlopen plugins whose provider library the host
+simply does not have (real case: `enchant`'s Hebrew backend plugin needs
+`libhspell.so.0`; neither Void nor the donor offers any provider, and
+enchant's module manager skips a plugin that fails to load). Blocking the
+whole transaction for it is honest but disproportionate — and silently
+ignoring it would be worse. The middle path is explicit:
+
+```sh
+lpm install code --orphan=libhspell.so.0    # repeatable / comma-separated
+```
+
+The named soname stays out of the built package's `shlib-requires`, the
+plugin file stays in the payload (it fails with grace at dlopen time),
+and the run prints a NOTE for every overlooked soname — plus one warning
+per flag, before anything is downloaded. Without the flag nothing
+changes: the block stays. Never automatic.
+
 ## Status
 
-- Version: **2.0.2** (platform-twin pruning; host-repodata name bridge;
-  cached indices; honest `any` arch; mirrors per donor; private libs
-  fold; automatic lib aliasing; frozen-snapshot mirror recipe; explicit
-  shlib-provides).
+- Version: **2.0.3** (explicit `--orphan` opt-in; platform-twin pruning;
+  host-repodata name bridge; cached indices; honest `any` arch; mirrors
+  per donor; private libs fold; automatic lib aliasing; frozen-snapshot
+  mirror recipe; explicit shlib-provides).
 - Working host policy: **Void ← Arch (default, stable)**, **Void ← Debian
   (experimental)**.
 - Validation: version comparators ported 1:1 from pacman/dpkg/xbps with

@@ -215,6 +215,18 @@ scan_vazio.self = { ["libx.so.1"] = true }
 local ok6d, blocos6d = preflight.check_elf("plugin", scan_vazio, semisl, "2.41_1")
 assert(ok6d and #blocos6d == 0, "soname próprio do payload não bloqueia")
 
+-- v2.0.3: órfão só passa QUANDO o usuário declara (--orphan); sem a
+-- declaração o bloqueio continua (honestidade > conveniência)
+local scan_orfao = { elf = 1, needed = {}, needed_names = { "libhspell.so.0" }, self = {}, glibc_min = nil }
+local ok6e, blocos6e = preflight.check_elf("enchant", scan_orfao, semisl, "2.41_1")
+assert(ok6e == false and #blocos6e == 1 and blocos6e[1]:find("libhspell", 1, true),
+	"órfão sem --orphan continua BLOQUEANDO")
+local ok6f, blocos6f, avisos6f = preflight.check_elf("enchant", scan_orfao, semisl, "2.41_1", nil,
+	{ ["libhspell.so.0"] = true })
+assert(ok6f and #blocos6f == 0, "órfão declarado em --orphan não bloqueia")
+assert(#avisos6f == 1 and avisos6f[1]:find("orphan allowed", 1, true),
+	"órfão declarado vira aviso explícito (nada em silêncio)")
+
 -- aliases (v1.2.1: 'libc6→glibc' é AUTOMÁTICO agora — via reconstrução do
 -- soname 'libc.so.6', que é a verdade mesmo; cada map do host decide)
 local aliases = require("lpm.aliases")

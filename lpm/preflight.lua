@@ -254,7 +254,7 @@ end
 -- como dep) não é bloqueio; fica anotado para transparência. A bolha
 -- privada '*' e as marcas da transação continuam à FRENTE do repo.
 -- returns ok(bool), bloqueios(list), avisos(list), resolvidos(list)
-function M.check_elf(name, scan, shlibs, host_glibc_ver, repo_shlibs)
+function M.check_elf(name, scan, shlibs, host_glibc_ver, repo_shlibs, orphans)
 	local ok = true
 	local bloqueios, avisos, resolvidos = {}, {}, {}
 
@@ -292,6 +292,14 @@ function M.check_elf(name, scan, shlibs, host_glibc_ver, repo_shlibs)
 			end
 			if have then
 				resolvidos[#resolvidos + 1] = s .. " → " .. (via_repo and ("repo:" .. have) or have)
+			elseif orphans and orphans[s] then
+				-- v2.0.3: órfão declarado pelo USUÁRIO (--orphan=SONAME).
+				-- O arquivo continua no payload; quem o dlopena (plugin
+				-- opcional) falha com graça no runtime. Nunca automático:
+				-- silêncio aqui esconderia incompatibilidade real.
+				table.insert(avisos, string.format(
+					"orphan allowed by --orphan: %s needs '%s' and no provider exists anywhere — dlopen-only consumers will skip it at runtime",
+					name, s))
 			else
 				ok = false
 				table.insert(bloqueios, string.format(

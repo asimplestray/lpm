@@ -401,7 +401,8 @@ function M.execute(entry, cfg, profile, staged, scan, tx, host_shlibs)
 		local seen = {}
 		for _, s in ipairs(scan.needed_names or {}) do
 			if not seen[s] and not (scan.self and scan.self[s])
-				and not (txp and txp.sonames and txp.sonames[s]) then
+				and not (txp and txp.sonames and txp.sonames[s])
+				and not (tx and tx.orphans and tx.orphans[s]) then
 				seen[s] = true
 				shreq[#shreq + 1] = s
 			end

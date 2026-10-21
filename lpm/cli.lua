@@ -503,6 +503,15 @@ function M.cmd_install(args)
 	end
 	local s = session()
 	local d = donor_of(args)
+	-- v2.0.3: órfãos declarados pelo usuário (--orphan=SONAME[,SONAME...]).
+	-- Explícito, nunca automático: o lpm prefere bloquear a esconder.
+	local orphans = {}
+	if type(args.orphan) == "string" then
+		for so in args.orphan:gmatch("[^,]+") do
+			orphans[so] = true
+			io.stderr:write(("lpm: NOTE: --orphan=%s — a soname with NO provider anywhere will be overlooked in this run; dlopen-only consumers skip it at runtime\n"):format(so))
+		end
+	end
 	load_indices(false, d)
 	local idxs = {}
 	for _, repo in ipairs(d.repos) do
@@ -817,7 +826,7 @@ function M.cmd_install(args)
 	for _, n in ipairs(nos) do
 		local okp, bloqueios, avisos, resolvidos = preflight.check_elf(
 			n.entry.name, n.scan, tx_shlibs, glibc_ver,
-			bridge and bridge.shlibs or nil)
+			bridge and bridge.shlibs or nil, orphans)
 		for _, a in ipairs(avisos) do print("  ~ " .. a) end
 		if #resolvidos > 0 then
 			print(("  [%s] provided sonames: %s"):format(n.entry.name,
@@ -839,6 +848,7 @@ function M.cmd_install(args)
 	-- da bolha EM /usr/lib/lpm/<pkg>/ e os bins ELF dele ganham o wrapper.
 	-- acontece ANTES do xbps-create: as libs ficam serem arquivos do pacote.
 	local tx = { pkgver = {}, vpkg = {} }
+	if next(orphans) then tx.orphans = orphans end
 	if #solved > 0 then tx.solved = plan.solved end
 	if bridge then tx.repo_shlibs = bridge.shlibs end
 	for _, n in ipairs(nos) do
@@ -1010,6 +1020,7 @@ end
 local usage = [[
 lpm 2.0 — rent the repositories of famous distros, install via the host's native PM.
 usage: lpm <command> [args] [--repo core|extra] [--donor=arch|debian] [--mirror=URL]
+                [install: --orphan=SONAME[,SONAME,...]
   detect                what this host is and which lpm profile applies
   doctor                diagnose interpreter, tools and lpm caches
   sync [--force]        download donor indices
@@ -1035,7 +1046,12 @@ local function parse_args(argv)
 		if a:sub(1, 2) == "--" then
 			local k, v = a:match("^%-%-([%w%-]+)=(.*)$")
 			if k then
-				args[k] = v
+				-- v2.0.3: --orphan= aceita repetição (soma por vírgula)
+				if k == "orphan" and args[k] then
+					args[k] = args[k] .. "," .. v
+				else
+					args[k] = v
+				end
 			else
 				k = a:sub(3)
 				if k == "repo" and argv[i + 1] and argv[i + 1]:sub(1, 1) ~= "-" then
@@ -1066,7 +1082,7 @@ local function main(argv)
 		return 0
 	end
 	if cmd == "--version" or cmd == "version" then
-		print("lpm 2.0.2")
+		print("lpm 2.0.3")
 		return 0
 	end
 	-- guarda de root: o lpm não precisa (e não deve) rodar como root — nunca
