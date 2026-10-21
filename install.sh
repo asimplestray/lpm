@@ -6,8 +6,8 @@
 #   * user-level install by default ($HOME/.local: share/ + bin/), so it
 #     NEVER needs sudo;
 #   * runs either from inside an lpm checkout, OR over the network
-#     ("curl -fsSL .../install.sh | sh"), in which case a repository
-#     URL is required.
+#     ("curl -fsSL .../install.sh | sh") — in that case it clones the repo
+#     that hosts this very script (default_url below; an arg/env URL wins).
 #
 # Usage:
 #   sh install.sh [options] [REPO_URL]
@@ -28,6 +28,11 @@
 # Uninstall:  rm -rf ~/.local/share/lpm ~/.local/bin/lpm
 
 set -u
+
+# v2.0.1: o one-liner público ("curl ... | sh") deve se localizar sozinho —
+# este arquivo vive NO repo, então o default é o próprio repositório.
+# (mude aqui se o repo espelhar em outro lugar; arg/env sempre vencem)
+default_url="https://github.com/asimplestray/lpm"
 
 usage() {
 	sed -n '/^# Usage:/,/^# Uninstall:/p' "$0" | sed 's/^# //;s/^#//'
@@ -112,10 +117,8 @@ if [ -n "$src" ]; then
 	cp "$src"/*.md "$src/install.sh" "$target/" 2>/dev/null || true
 else
 	if [ -z "$url" ]; then
-		echo "install.sh: no lpm source found." >&2
-		echo "  run it from inside an lpm checkout, or give the repo URL:" >&2
-		echo "    sh install.sh <REPO_URL>            (or: \$LPM_REPO_URL=… sh install.sh)" >&2
-		exit 2
+		# piped sem arg nem env: usa o default (o repo que hospeda este script)
+		url=$default_url
 	fi
 	target="$prefix/share/lpm"
 	install_tree "$target"
